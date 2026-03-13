@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ObjoradDdd/AuthService/internal/db"
 	"github.com/ObjoradDdd/AuthService/internal/handler"
+	"github.com/ObjoradDdd/AuthService/internal/kafka"
 	"github.com/ObjoradDdd/AuthService/internal/service"
 )
 
@@ -41,7 +43,11 @@ func main() {
 
 	defer db.Close()
 
-	userServise := service.NewUserService(db)
+	kafkaProducer := kafka.NewProducer(strings.Split(os.Getenv("KAFKA_BROKERS"), ","))
+
+	defer kafkaProducer.Close()
+
+	userServise := service.NewUserService(db, kafkaProducer)
 
 	userHandler := handler.NewUserHandler(userServise)
 

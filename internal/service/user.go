@@ -1,18 +1,23 @@
 package service
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/ObjoradDdd/AuthService/internal/db"
+	"github.com/ObjoradDdd/AuthService/internal/kafka"
 	"github.com/ObjoradDdd/AuthService/internal/model"
 )
 
 type UserService struct {
 	storage *db.Storage
+	kafka   *kafka.Producer
 }
 
-func NewUserService(storage *db.Storage) *UserService {
-	return &UserService{storage: storage}
+func NewUserService(storage *db.Storage, kafka *kafka.Producer) *UserService {
+	return &UserService{storage: storage, kafka: kafka}
 }
 
 func (s *UserService) RegisterUser(user *model.User, password string) (*model.User, error) {
@@ -57,7 +62,24 @@ func (s *UserService) Login(u *model.User, password string) (*model.User, error)
 }
 
 func (s *UserService) DeleteUserByID(id int) error {
-	return s.storage.DeleteUserById(id)
+	err := s.storage.DeleteUserById(id)
+	if err != nil {
+		return err
+	}
+
+	go func(id int) {
+		for i := 0; i < 5; i++ {
+			err := s.kafka.SendUserDeleted(context.Background(), id)
+			if err == nil {
+				slog.Info("User deleted event sent to Kafka", "userID", id)
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+		slog.Error("Failed to send user deleted event", "userID", id)
+	}(id)
+
+	return nil
 }
 
 func (s *UserService) UpdateUserLogin(user *model.User) error {

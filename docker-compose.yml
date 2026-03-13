@@ -41,3 +41,9 @@ services:
 
 volumes:
   pg_data:
+
+
+networks:
+  default:
+    name: test-network
+    external: true

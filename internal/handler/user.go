@@ -36,8 +36,6 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println(req)
-
 	user, err := h.userService.Login(&model.User{Login: req.Login}, req.Password)
 	if err != nil {
 		http.Error(w, "Invalid login or password", http.StatusUnauthorized)
