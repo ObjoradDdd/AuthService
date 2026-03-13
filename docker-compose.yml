@@ -3,13 +3,13 @@ version: '3.8'
 services:
   db:
     image: postgres:15-alpine
-    container_name: pg_base
+    container_name: auth_postgres
     environment:
       POSTGRES_USER: student
       POSTGRES_PASSWORD: password
       POSTGRES_DB: auth
     ports:
-      - "5433:5433"
+      - "5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,13 +25,16 @@ services:
     container_name: go_app
     network_mode: "host"
     environment:
-      - DB_HOST=127.0.0.1 
-      - DB_PORT=5433
       - DB_USER=student
       - DB_PASSWORD=password
+      - DB_HOST=127.0.0.1 
+      - DB_PORT=5433
       - DB_NAME=auth
+      - DB_TYPE=postgres
     volumes:
       - ./.env:/app/.env:ro
+      - ./private.pem:/app/private.pem:ro
+      - ./public.pem:/app/public.pem:ro
     depends_on:
       db:
         condition: service_healthy

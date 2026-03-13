@@ -48,7 +48,7 @@ func main() {
 	mux.HandleFunc("POST /user/login", userHandler.Login)
 	mux.HandleFunc("POST /user/register", userHandler.Register)
 	mux.HandleFunc("DELETE /user/delete", handler.Middleware(userHandler.Delete))
-	mux.HandleFunc("PUT /user/update-password", handler.Middleware(userHandler.UpdateHash))
+	mux.HandleFunc("PUT /user/reset-password", handler.Middleware(userHandler.UpdateHash))
 
 	err = http.ListenAndServe(":5134", mux)
 	if err != nil {
