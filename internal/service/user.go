@@ -16,7 +16,7 @@ func NewUserService(storage *db.Storage) *UserService {
 }
 
 func (s *UserService) RegisterUser(user *model.User, password string) (*model.User, error) {
-	hash, err := encrypt(password)
+	hash, err := HashPassword(password)
 	if err != nil {
 		return &model.User{}, err
 	}
@@ -30,16 +30,11 @@ func (s *UserService) UpdateUserHash(user *model.User, newPassword string, curre
 		return fmt.Errorf("Error fetching current hash for user ID %d: %w", user.Id, err)
 	}
 
-	currentPasswordReal, err := decrypt(currentHash)
-	if err != nil {
-		return fmt.Errorf("Error decrypting current hash for user ID %d: %w", user.Id, err)
-	}
-
-	if currentPasswordReal != currentPassword {
+	if !CheckPasswordHash(currentPassword, currentHash) {
 		return fmt.Errorf("Current password is incorrect for user ID %d", user.Id)
 	}
 
-	hash, err := encrypt(newPassword)
+	hash, err := HashPassword(newPassword)
 	if err != nil {
 		return err
 	}
@@ -53,12 +48,7 @@ func (s *UserService) Login(u *model.User, password string) (*model.User, error)
 		return nil, err
 	}
 
-	passwordFromHash, err := decrypt(userHash)
-	if err != nil {
-		return nil, fmt.Errorf("error decrypting hash for user: %s", user.Login)
-	}
-
-	if passwordFromHash != password {
+	if !CheckPasswordHash(password, userHash) {
 		return nil, fmt.Errorf("invalid password for user: %s", user.Login)
 	}
 
