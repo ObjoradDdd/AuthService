@@ -1,52 +1,24 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/rsa"
+	"encoding/json"
 	"errors"
-	"os"
+	"net/http"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/joho/godotenv"
 )
 
-var (
-	privateKey *rsa.PrivateKey
-	publicKey  *rsa.PublicKey
-)
-
-func init() {
-	godotenv.Load()
-
-	privPath := os.Getenv("JWT_PRIVATE_KEY_PATH")
-	pubPath := os.Getenv("JWT_PUBLIC_KEY_PATH")
-
-	if privPath != "" {
-		bytes, err := os.ReadFile(privPath)
-		if err != nil {
-			panic("ошибка чтения приватного ключа: " + err.Error())
-		}
-		privateKey, err = jwt.ParseRSAPrivateKeyFromPEM(bytes)
-		if err != nil {
-			panic("ошибка парсинга приватного ключа: " + err.Error())
-		}
-	}
-
-	if pubPath != "" {
-		bytes, err := os.ReadFile(pubPath)
-		if err != nil {
-			panic("ошибка чтения публичного ключа: " + err.Error())
-		}
-		publicKey, err = jwt.ParseRSAPublicKeyFromPEM(bytes)
-		if err != nil {
-			panic("ошибка парсинга публичного ключа: " + err.Error())
-		}
-	}
+type errorResponse struct {
+	Error string `json:"error"`
 }
 
-func generateToken(Id int) (string, error) {
+func generateToken(Id int, privateKey *rsa.PrivateKey) (string, error) {
 	if privateKey == nil {
-		return "", errors.New("приватный ключ не загружен")
+		return "", errors.New("private key is nil")
 	}
 
 	claims := jwt.MapClaims{
@@ -56,4 +28,53 @@ func generateToken(Id int) (string, error) {
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	return token.SignedString(privateKey)
+}
+
+func getUserID(w http.ResponseWriter, r *http.Request) (int, error) {
+	userID, ok := r.Context().Value(UserIDKey).(int)
+	if !ok {
+		respondWithError(w, http.StatusInternalServerError, "internal server error: failed to get user id from context")
+		return 0, errors.New("user id not found in context")
+	}
+	return userID, nil
+}
+
+func decodeRequest(w http.ResponseWriter, r *http.Request, req any) error {
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "bad request: invalid json")
+		return err
+	}
+	return nil
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload any) {
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(payload); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "failed to encode response")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(buf.Bytes())
+}
+
+func respondWithError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(errorResponse{Error: message})
+}
+
+func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request, req any, validator *validator.Validate) error {
+	if err := decodeRequest(w, r, req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "error decoding request body")
+		return err
+	}
+
+	if err := validator.Struct(req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "validation error")
+		return err
+	}
+
+	return nil
 }

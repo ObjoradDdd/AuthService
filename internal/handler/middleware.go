@@ -6,6 +6,10 @@ import (
 	"strconv"
 )
 
+type contextKey string
+
+const UserIDKey contextKey = "userId"
+
 func Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-User-ID")
@@ -20,7 +24,7 @@ func Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "userId", userId)
+		ctx := context.WithValue(r.Context(), UserIDKey, userId)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }

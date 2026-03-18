@@ -20,17 +20,17 @@ func NewUserService(storage *db.Storage, kafka *kafka.Producer) *UserService {
 	return &UserService{storage: storage, kafka: kafka}
 }
 
-func (s *UserService) RegisterUser(user *model.User, password string) (*model.User, error) {
+func (s *UserService) RegisterUser(ctx context.Context, user *model.User, password string) (*model.User, error) {
 	hash, err := HashPassword(password)
 	if err != nil {
 		return &model.User{}, err
 	}
 
-	return s.storage.CreateUser(user, hash)
+	return s.storage.CreateUser(ctx, user, hash)
 }
 
-func (s *UserService) UpdateUserHash(user *model.User, newPassword string, currentPassword string) error {
-	currentHash, err := s.storage.GetHashById(user.Id)
+func (s *UserService) UpdateUserHash(ctx context.Context, user *model.User, newPassword string, currentPassword string) error {
+	currentHash, err := s.storage.GetHashById(ctx, user.Id)
 	if err != nil {
 		return fmt.Errorf("Error fetching current hash for user ID %d: %w", user.Id, err)
 	}
@@ -44,11 +44,11 @@ func (s *UserService) UpdateUserHash(user *model.User, newPassword string, curre
 		return err
 	}
 
-	return s.storage.UpdateUserHash(user, hash)
+	return s.storage.UpdateUserHash(ctx, user, hash)
 }
 
-func (s *UserService) Login(u *model.User, password string) (*model.User, error) {
-	user, userHash, err := s.storage.GetUserAndHashByLogin(u.Login)
+func (s *UserService) Login(ctx context.Context, u *model.User, password string) (*model.User, error) {
+	user, userHash, err := s.storage.GetUserAndHashByLogin(ctx, u.Login)
 	if err != nil {
 		return nil, err
 	}
@@ -61,15 +61,15 @@ func (s *UserService) Login(u *model.User, password string) (*model.User, error)
 
 }
 
-func (s *UserService) DeleteUserByID(id int) error {
-	err := s.storage.DeleteUserById(id)
+func (s *UserService) DeleteUserByID(ctx context.Context, id int) error {
+	err := s.storage.DeleteUserById(ctx, id)
 	if err != nil {
 		return err
 	}
 
 	go func(id int) {
 		for i := 0; i < 5; i++ {
-			err := s.kafka.SendUserDeleted(context.Background(), id)
+			err := s.kafka.SendUserDeleted(ctx, id)
 			if err == nil {
 				slog.Info("User deleted event sent to Kafka", "userID", id)
 				return
@@ -82,6 +82,6 @@ func (s *UserService) DeleteUserByID(id int) error {
 	return nil
 }
 
-func (s *UserService) UpdateUserLogin(user *model.User) error {
-	return s.storage.UpdateUserLogin(user)
+func (s *UserService) UpdateUserLogin(ctx context.Context, user *model.User) error {
+	return s.storage.UpdateUserLogin(ctx, user)
 }

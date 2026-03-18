@@ -1,25 +1,31 @@
 package handler
 
 import (
-	"encoding/json"
-	"fmt"
+	"crypto/rsa"
 	"net/http"
 
 	"github.com/ObjoradDdd/AuthService/internal/model"
 	"github.com/ObjoradDdd/AuthService/internal/service"
+	"github.com/go-playground/validator/v10"
 )
 
 type UserHandler struct {
 	userService *service.UserService
+	privateKey  *rsa.PrivateKey
+	validator   *validator.Validate
 }
 
-func NewUserHandler(userService *service.UserService) *UserHandler {
-	return &UserHandler{userService: userService}
+func NewUserHandler(userService *service.UserService, privateKey *rsa.PrivateKey) *UserHandler {
+	return &UserHandler{
+		userService: userService,
+		privateKey:  privateKey,
+		validator:   validator.New(),
+	}
 }
 
 type loginRequest struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
+	Login    string `json:"login" validate:"required,min=3,max=64"`
+	Password string `json:"password" validate:"required,min=6"`
 }
 
 type loginResponse struct {
@@ -27,35 +33,30 @@ type loginResponse struct {
 }
 
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	var req loginRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+	if err := decodeAndValidateRequest(w, r, &req, h.validator); err != nil {
 		return
 	}
 
-	user, err := h.userService.Login(&model.User{Login: req.Login}, req.Password)
+	user, err := h.userService.Login(r.Context(), &model.User{Login: req.Login}, req.Password)
 	if err != nil {
-		http.Error(w, "Invalid login or password", http.StatusUnauthorized)
+		respondWithError(w, http.StatusUnauthorized, "invalid login or password")
 		return
 	}
 
-	token, err := generateToken(user.Id)
+	token, err := generateToken(user.Id, h.privateKey)
 	if err != nil {
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
+		respondWithError(w, http.StatusInternalServerError, "error generating token")
 		return
 	}
 
 	resp := loginResponse{Token: token}
-	json.NewEncoder(w).Encode(resp)
-
+	respondWithJSON(w, http.StatusOK, resp)
 }
 
 type registerRequest struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
+	Login    string `json:"login" validate:"required,min=3,max=64"`
+	Password string `json:"password" validate:"required,min=6"`
 }
 
 type registerResponse struct {
@@ -63,31 +64,25 @@ type registerResponse struct {
 }
 
 func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	var req registerRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+	if err := decodeAndValidateRequest(w, r, &req, h.validator); err != nil {
 		return
 	}
 
-	fmt.Println(req)
-
-	user, err := h.userService.RegisterUser(&model.User{Login: req.Login}, req.Password)
+	user, err := h.userService.RegisterUser(r.Context(), &model.User{Login: req.Login}, req.Password)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	token, err := generateToken(user.Id)
+	token, err := generateToken(user.Id, h.privateKey)
 	if err != nil {
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
+		respondWithError(w, http.StatusInternalServerError, "error generating token")
 		return
 	}
 
 	resp := registerResponse{Token: token}
-	json.NewEncoder(w).Encode(resp)
+	respondWithJSON(w, http.StatusOK, resp)
 }
 
 type deleteResponse struct {
@@ -95,23 +90,24 @@ type deleteResponse struct {
 }
 
 func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	id := r.Context().Value("userId").(int)
-
-	err := h.userService.DeleteUserByID(id)
+	id, err := getUserID(w, r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = h.userService.DeleteUserByID(r.Context(), id)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	resp := deleteResponse{Id: id}
-	json.NewEncoder(w).Encode(resp)
+	respondWithJSON(w, http.StatusOK, resp)
 }
 
 type updateHashRequest struct {
-	NewPassword     string `json:"password"`
-	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"password" validate:"required,min=6"`
+	CurrentPassword string `json:"currentPassword" validate:"required"`
 }
 
 type updateHashResponse struct {
@@ -119,22 +115,21 @@ type updateHashResponse struct {
 }
 
 func (h *UserHandler) UpdateHash(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	var req updateHashRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+	if err := decodeAndValidateRequest(w, r, &req, h.validator); err != nil {
 		return
 	}
 
-	id := r.Context().Value("userId").(int)
-
-	err = h.userService.UpdateUserHash(&model.User{Id: id}, req.NewPassword, req.CurrentPassword)
+	id, err := getUserID(w, r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(updateHashResponse{Id: id})
+	err = h.userService.UpdateUserHash(r.Context(), &model.User{Id: id}, req.NewPassword, req.CurrentPassword)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, updateHashResponse{Id: id})
 }
