@@ -39,7 +39,6 @@ func (p *Producer) SendUserDeleted(ctx context.Context, userID int) error {
 	}
 
 	bytes, _ := json.Marshal(event)
-
 	err := p.writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(fmt.Sprint(userID)),
 		Value: bytes,

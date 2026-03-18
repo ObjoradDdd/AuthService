@@ -69,7 +69,10 @@ func (s *UserService) DeleteUserByID(ctx context.Context, id int) error {
 
 	go func(id int) {
 		for i := 0; i < 5; i++ {
-			err := s.kafka.SendUserDeleted(ctx, id)
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			err := s.kafka.SendUserDeleted(bgCtx, id)
 			if err == nil {
 				slog.Info("User deleted event sent to Kafka", "userID", id)
 				return

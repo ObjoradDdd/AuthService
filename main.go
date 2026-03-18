@@ -19,25 +19,28 @@ import (
 	"github.com/ObjoradDdd/AuthService/internal/kafka"
 	"github.com/ObjoradDdd/AuthService/internal/service"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+
+	// Загружаем переменные окружения из .env файла
+	if err := godotenv.Load(); err != nil {
+		slog.Warn("no .env file found, using system environment variables")
+	}
+
+	// Канал для получения ошибок от сервера
+	serverErrors := make(chan error, 1)
 
 	// Создание основного контекста, который будет отменён при получении сигнала завершения
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Используем WaitGroup для ожидания завершения всех горутин при shutdown
-	var wg sync.WaitGroup
-
-	// Создание канала для ошибок сервера, чтобы можно было корректно обработать их при завершении
-	serverErrors := make(chan error, 1)
-
 	// Инициализация базы данных
 	db, err := initDatabase(ctx)
 	if err != nil {
 		slog.Error("Connection to database failed", "error", err)
-		serverErrors <- err
+		return
 	}
 	defer db.Close()
 
@@ -49,25 +52,28 @@ func main() {
 	userService := service.NewUserService(db, kafkaProducer)
 
 	// Загрузка RSA приватного ключа
-	bytes, err := os.ReadFile(os.Getenv("RSA_PRIVATE_KEY_PATH"))
+	bytes, err := os.ReadFile(os.Getenv("JWT_PRIVATE_KEY_PATH"))
 	if err != nil {
-		slog.Error("Error reading RSA private key", "path", os.Getenv("RSA_PRIVATE_KEY_PATH"), "error", err)
-		serverErrors <- err
+		slog.Error("Error reading RSA private key", "path", os.Getenv("JWT_PRIVATE_KEY_PATH"), "error", err)
+		return
 	}
 	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(bytes)
 	if err != nil {
 		slog.Error("Error parsing RSA private key", "error", err)
-		serverErrors <- err
+		return
 	}
 
 	// Настройка HTTP сервера
 	router := setupRouter(userService, privateKey)
 
+	// Используем WaitGroup для ожидания завершения всех горутин при shutdown
+	var wg sync.WaitGroup
+
 	var srv *http.Server
 	port, err := strconv.Atoi(os.Getenv("SERVER_PORT"))
 	if err != nil {
 		slog.Warn("invalid SERVER_PORT", "error", err)
-		serverErrors <- err
+		return
 	} else {
 		srv = &http.Server{
 			Addr:    fmt.Sprintf(":%d", port),
@@ -82,14 +88,23 @@ func main() {
 
 	}
 
-	// Ожидание сигнала завершения или ошибки сервера
+	// Ожидаем сигнала завершения или ошибки сервера
 	select {
 	case err := <-serverErrors:
-		if err != http.ErrServerClosed {
-			slog.Error("server failed prematurely", "error", err)
-		}
+		slog.Error("server failed to start", "error", err)
 	case <-ctx.Done():
 		slog.Info("shutdown signal received")
+	}
+
+	// Создаем контекст с таймаутом для корректного завершения сервера
+	if srv != nil {
+		shutdownCtx, serverStop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer serverStop()
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("forced shutdown", "error", err)
+			srv.Close()
+		}
 	}
 
 	// Ждем завершения всех горутин
