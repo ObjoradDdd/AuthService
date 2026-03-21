@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rsa"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,12 +13,13 @@ import (
 )
 
 type UserService struct {
-	storage *db.Storage
-	kafka   *kafka.Producer
+	storage    *db.Storage
+	kafka      *kafka.Producer
+	privateKey *rsa.PrivateKey
 }
 
-func NewUserService(storage *db.Storage, kafka *kafka.Producer) *UserService {
-	return &UserService{storage: storage, kafka: kafka}
+func NewUserService(storage *db.Storage, kafka *kafka.Producer, privateKey *rsa.PrivateKey) *UserService {
+	return &UserService{storage: storage, kafka: kafka, privateKey: privateKey}
 }
 
 func (s *UserService) RegisterUser(ctx context.Context, user *model.User, password string) (*model.User, error) {
@@ -43,21 +45,25 @@ func (s *UserService) UpdateUserHash(ctx context.Context, user *model.User, newP
 	if err != nil {
 		return err
 	}
-
 	return s.storage.UpdateUserHash(ctx, user, hash)
 }
 
-func (s *UserService) Login(ctx context.Context, u *model.User, password string) (*model.User, error) {
+func (s *UserService) Login(ctx context.Context, u *model.User, password string) (*model.User, string, error) {
 	user, userHash, err := s.storage.GetUserAndHashByLogin(ctx, u.Login)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if !CheckPasswordHash(password, userHash) {
-		return nil, fmt.Errorf("invalid password for user: %s", user.Login)
+		return nil, "", fmt.Errorf("invalid password for user: %s", user.Login)
 	}
 
-	return user, nil
+	token, err := generateToken(user.Id, s.privateKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("error generating token")
+	}
+
+	return user, token, nil
 
 }
 

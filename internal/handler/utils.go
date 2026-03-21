@@ -1,20 +1,17 @@
 package handler
 
 import (
-	"bytes"
+	"context"
 	"crypto/rsa"
-	"encoding/json"
 	"errors"
-	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/golang-jwt/jwt/v5"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
-
-type errorResponse struct {
-	Error string `json:"error"`
-}
 
 func generateToken(Id int, privateKey *rsa.PrivateKey) (string, error) {
 	if privateKey == nil {
@@ -30,51 +27,21 @@ func generateToken(Id int, privateKey *rsa.PrivateKey) (string, error) {
 	return token.SignedString(privateKey)
 }
 
-func getUserID(w http.ResponseWriter, r *http.Request) (int, error) {
-	userID, ok := r.Context().Value(UserIDKey).(int)
+func getUserIDFromMetadata(ctx context.Context) (int, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		respondWithError(w, http.StatusInternalServerError, "internal server error: failed to get user id from context")
-		return 0, errors.New("user id not found in context")
-	}
-	return userID, nil
-}
-
-func decodeRequest(w http.ResponseWriter, r *http.Request, req any) error {
-	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "bad request: invalid json")
-		return err
-	}
-	return nil
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload any) {
-	buf := new(bytes.Buffer)
-	if err := json.NewEncoder(buf).Encode(payload); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "failed to encode response")
-		return
+		return 0, status.Error(codes.Unauthenticated, "metadata not found in context")
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	w.Write(buf.Bytes())
-}
-
-func respondWithError(w http.ResponseWriter, code int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(errorResponse{Error: message})
-}
-
-func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request, req any, validator *validator.Validate) error {
-	if err := decodeRequest(w, r, req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "error decoding request body")
-		return err
+	values := md.Get("x-user-id")
+	if len(values) == 0 || values[0] == "" {
+		return 0, status.Error(codes.Unauthenticated, "user-id not found")
 	}
 
-	if err := validator.Struct(req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "validation error")
-		return err
+	id, err := strconv.Atoi(values[0])
+	if err != nil {
+		return 0, status.Error(codes.InvalidArgument, "invalid user-id format")
 	}
 
-	return nil
+	return id, nil
 }

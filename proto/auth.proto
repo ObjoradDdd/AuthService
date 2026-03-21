@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package auth;
+
+option go_package = "github.com/ObjoradDdd/AuthService/proto";
+
+service AuthService {
+  rpc Register(RegisterRequest) returns (AuthResponse);
+  rpc Login(LoginRequest) returns (AuthResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (SuccesMessage);
+  rpc ChangeUserPassword(ChangeUserPasswordRequest) returns (SuccesMessage);
+  rpc ChangeUserLogin(ChangeUserLoginRequest) returns (SuccesMessage);
+}
+
+message RegisterRequest {
+  string login = 1;
+  string password = 2;
+}
+
+message LoginRequest {
+  string login = 1;
+  string password = 2;
+}
+
+message AuthResponse {
+  string token = 1;
+  int32 user_id = 2;
+}
+
+message DeleteUserRequest {
+}
+
+message SuccesMessage {
+  string m = 1;
+}
+
+message ChangeUserPasswordRequest {
+  string currentPassword = 2;
+  string newPassword = 3;
+}
+
+message ChangeUserLoginRequest {
+  string newLogin = 2;
+}

@@ -33,6 +33,7 @@ services:
       - DB_TYPE=postgres
     volumes:
       - ./.env:/app/.env:ro
+      - ./cert:/app/cert:ro
       - ./private.pem:/app/private.pem:ro
       - ./public.pem:/app/public.pem:ro
     depends_on:

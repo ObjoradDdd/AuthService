@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
-	"net/http"
+	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,12 +18,14 @@ import (
 	"github.com/ObjoradDdd/AuthService/internal/handler"
 	"github.com/ObjoradDdd/AuthService/internal/kafka"
 	"github.com/ObjoradDdd/AuthService/internal/service"
+	pb "github.com/ObjoradDdd/AuthService/proto"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func main() {
-
 	// Загружаем переменные окружения из .env файла
 	if err := godotenv.Load(); err != nil {
 		slog.Warn("no .env file found, using system environment variables")
@@ -48,9 +50,6 @@ func main() {
 	kafkaProducer := kafka.NewProducer(strings.Split(os.Getenv("KAFKA_BROKERS"), ","))
 	defer kafkaProducer.Close()
 
-	// Инициализация сервисов
-	userService := service.NewUserService(db, kafkaProducer)
-
 	// Загрузка RSA приватного ключа
 	bytes, err := os.ReadFile(os.Getenv("JWT_PRIVATE_KEY_PATH"))
 	if err != nil {
@@ -63,30 +62,39 @@ func main() {
 		return
 	}
 
-	// Настройка HTTP сервера
-	router := setupRouter(userService, privateKey)
+	// Инициализация сервисов
+	userService := service.NewUserService(db, kafkaProducer, privateKey)
 
-	// Используем WaitGroup для ожидания завершения всех горутин при shutdown
+	// Настройка TLS для gRPC сервера
+	tlsConfig, err := loadTLSCredentials()
+	if err != nil {
+		slog.Error("failed to load TLS credentials", "error", err)
+		return
+	}
+
+	// Создание группы ожидания
 	var wg sync.WaitGroup
 
-	var srv *http.Server
-	port, err := strconv.Atoi(os.Getenv("SERVER_PORT"))
-	if err != nil {
-		slog.Warn("invalid SERVER_PORT", "error", err)
-		return
-	} else {
-		srv = &http.Server{
-			Addr:    fmt.Sprintf(":%d", port),
-			Handler: router,
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slog.Info("server is starting", "port", port, "url", fmt.Sprintf("http://localhost:%d", port))
-			serverErrors <- srv.ListenAndServe()
-		}()
+	// Запуск gRPC сервера в отдельной горутине
+	grpcServer := handler.NewAuthGRPCServer(userService, privateKey)
+	s := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	pb.RegisterAuthServiceServer(s, grpcServer)
 
+	lis, err := net.Listen("tcp", os.Getenv("GRPC_URL"))
+	if err != nil {
+		slog.Error("failed to listen", "error", err)
+		return
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		slog.Info("gRPC server is listening on", "url", os.Getenv("GRPC_URL"))
+		if err := s.Serve(lis); err != nil {
+			serverErrors <- fmt.Errorf("failed to serve: %w", err)
+			return
+		}
+	}()
 
 	// Ожидаем сигнала завершения или ошибки сервера
 	select {
@@ -96,15 +104,10 @@ func main() {
 		slog.Info("shutdown signal received")
 	}
 
-	// Создаем контекст с таймаутом для корректного завершения сервера
-	if srv != nil {
-		shutdownCtx, serverStop := context.WithTimeout(context.Background(), 10*time.Second)
-		defer serverStop()
-
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			slog.Error("forced shutdown", "error", err)
-			srv.Close()
-		}
+	// Останавливаем gRPC сервер
+	if s != nil {
+		s.GracefulStop()
+		slog.Info("gRPC server stopped")
 	}
 
 	// Ждем завершения всех горутин
@@ -126,15 +129,27 @@ func initDatabase(ctx context.Context) (*db.Storage, error) {
 	})
 }
 
-func setupRouter(userService *service.UserService, privateKey *rsa.PrivateKey) *http.ServeMux {
-	mux := http.NewServeMux()
+func loadTLSCredentials() (*tls.Config, error) {
+	// Загружаем сертификат сервера и ключ
+	serverCert, err := tls.LoadX509KeyPair(os.Getenv("TLS_CERT_PATH"), os.Getenv("TLS_KEY_PATH"))
+	if err != nil {
+		return nil, fmt.Errorf("could not load server key pair: %w", err)
+	}
 
-	userHandler := handler.NewUserHandler(userService, privateKey)
+	// Загружаем сертификат CA
+	certPool := x509.NewCertPool()
+	ca, err := os.ReadFile(os.Getenv("TLS_CA_PATH"))
+	if err != nil {
+		return nil, fmt.Errorf("could not read CA certificate: %w", err)
+	}
+	certPool.AppendCertsFromPEM(ca)
 
-	mux.HandleFunc("POST /user/login", userHandler.Login)
-	mux.HandleFunc("POST /user/register", userHandler.Register)
-	mux.HandleFunc("DELETE /user/delete", handler.Middleware(userHandler.Delete))
-	mux.HandleFunc("PUT /user/reset-password", handler.Middleware(userHandler.UpdateHash))
+	// Настраиваем конфиг TLS для сервера
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert, // Обязательная проверка
+		ClientCAs:    certPool,
+	}
 
-	return mux
+	return tlsConfig, nil
 }
